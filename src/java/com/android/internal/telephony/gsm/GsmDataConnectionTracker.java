@@ -489,6 +489,12 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
             if (DBG) log("enableApnType: return APN_ALREADY_ACTIVE");
             return PhoneConstants.APN_ALREADY_ACTIVE;
         }
+        if (mPhone.mCM.needsOldRilFeature("singlepdp") && !PhoneConstants.APN_TYPE_DEFAULT.equals(apnType)) {
+            ApnContext defContext = mApnContexts.get(PhoneConstants.APN_TYPE_DEFAULT);
+            if (defContext.isEnabled()) {
+                setEnabled(apnTypeToId(PhoneConstants.APN_TYPE_DEFAULT), false);
+            }
+        }
         setEnabled(apnTypeToId(apnType), true);
         if (DBG) {
             log("enableApnType: new apn request for type " + apnType +
@@ -523,6 +529,9 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
 
         if (apnContext != null) {
             setEnabled(apnTypeToId(type), false);
+            if (mPhone.mCM.needsOldRilFeature("singlepdp") && !PhoneConstants.APN_TYPE_DEFAULT.equals(type)) {
+                setEnabled(apnTypeToId(PhoneConstants.APN_TYPE_DEFAULT), true);
+            }
             if (apnContext.getState() != DctConstants.State.IDLE && apnContext.getState()
                     != DctConstants.State.FAILED) {
                 if (DBG) log("diableApnType: return APN_REQUEST_STARTED");
@@ -742,9 +751,7 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
 
         boolean desiredPowerState = mPhone.getServiceStateTracker().getDesiredPowerState();
 
-        if ((apnContext.getState() == DctConstants.State.IDLE ||
-                    apnContext.getState() == DctConstants.State.SCANNING) &&
-                isDataAllowed(apnContext) && getAnyDataEnabled() && !isEmergency()) {
+        if (canSetupData(apnContext)) {
 
             if (apnContext.getState() == DctConstants.State.IDLE) {
                 ArrayList<ApnSetting> waitingApns = buildWaitingApns(apnContext.getApnType());
@@ -777,6 +784,41 @@ public final class GsmDataConnectionTracker extends DataConnectionTracker {
             notifyOffApnsOfAvailability(apnContext.getReason());
             return false;
         }
+    }
+
+   /**
+    * Report on whether data connectivity can be setup for any APN.
+    * @param apnContext The apnContext
+    * @return boolean
+    */
+    private boolean canSetupData(ApnContext apnContext) {
+        if (apnContext.getState() != DctConstants.State.IDLE && apnContext.getState() != DctConstants.State.SCANNING) {
+            return false;
+        }
+
+        if (isDataAllowed(apnContext) && getAnyDataEnabled() && !isEmergency()) {
+            return true;
+        }
+
+        // Get the MMS retrieval settings. Defaults to enabled with roaming disabled
+        final ContentResolver resolver = mPhone.getContext().getContentResolver();
+        boolean mmsAutoRetrieval = Settings.System.getInt(resolver,
+                Settings.System.MMS_AUTO_RETRIEVAL, 1) == 1;
+        boolean mmsRetrievalRoaming = Settings.System.getInt(resolver,
+                Settings.System.MMS_AUTO_RETRIEVAL_ON_ROAMING, 0) == 1;
+
+        // Allow automatic Mms connections if user has enabled it
+        if (mmsAutoRetrieval && apnContext.getApnType().equals(PhoneConstants.APN_TYPE_MMS)) {
+            // don't allow MMS connections while roaming if disabled
+            TelephonyManager tm = (TelephonyManager)
+                    mPhone.getContext().getSystemService(Context.TELEPHONY_SERVICE);
+            if (tm.isNetworkRoaming() && !mmsRetrievalRoaming) {
+                return false;
+            }
+            return true;
+        }
+
+        return false;
     }
 
     @Override
